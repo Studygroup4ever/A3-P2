@@ -110,13 +110,87 @@ confusionMatrix(data = df$pred, reference = df$Diagnosis, positive = "Schizophre
 df$pred <- as.numeric(df$pred)
 
 rocCurve <- roc(response = df$Diagnosis, predictor = df$pred)
-auc(rocCurve) #amazing
+a <- as.numeric(auc(rocCurve)) #amazing #numeric
 ci(rocCurve)
 plot(rocCurve, legacy.axes = TRUE) + title("such results very help such education many learn") #LOOOOOOOOOOOOOOOOOL
 
 ```
 
 Then cross-validate the logistic regression and re-calculate performance on the testing folds. N.B. The cross-validation functions you already have should be tweaked: you need to calculate these new performance measures. Alternatively, the groupdata2 and cvms package created by Ludvig are an easy solution. 
+
+# Creating test/train set
+```{r}
+folding <- function(syntax){
+  k = 10 
+  folds <- createFolds(unique(sub_df1$ID), k = k, list = TRUE, returnTrain = FALSE) 
+  trainRMSE <- rep(NA, k) 
+  testRMSE <- rep(NA, k) 
+  
+  train_auc = rep(NA, k)
+  test_auc = rep(NA, k) 
+  
+  train_sens = rep(NA, k)
+  test_sens = rep(NA, k)
+  
+  train_spec = rep(NA, k) #placeholders, fydler edm ud i næste loop
+  test_spec = rep(NA, k) 
+  
+  #train_ci = rep(NA,k)
+  #test_ci = rep(NA,k)
+  
+  train_PPV = rep(NA, k)
+  test_PPV = rep(NA, k)
+  train_NPV = rep(NA, k)
+  test_NPV = rep(NA, k)
+
+i = 1 
+for (fold in folds) {
+  train = subset(sub_df1,!(ID %in% fold)) 
+  test = subset(sub_df1, ID %in% fold) 
+  model = glmer(syntax, train, REML = F) 
+  test <- test %>%
+  mutate(pred = logit2prob(predict(model, newdata = test)),
+         prediction = as.factor(ifelse(pred > .5, "Schizophrenia", "Control")))
+  
+  train <- train %>%
+  mutate(pred = logit2prob(predict(model)),
+         prediction = as.factor(ifelse(pred > .5, "Schizophrenia", "Control")))
+  
+  trainRMSE[i] = rmse(train$CHI_MLU, fitted(model)) # saving RMSE value for the training data at index i
+  testRMSE[i] = rmse(test$CHI_MLU, test$prediction) # saving RMSE value for the test data at index i
+  train_rocCurve = roc(response = train$Diagnosis, predictor = train$pred)
+  test_rocCurve = roc(response = test$Diagnosis, predictor = test$pred)
+  train_auc[i] = as.numeric(auc(train_rocCurve))
+  test_auc[i] = as.numeric(auc(test_rocCurve))
+  train_sens[i] = sensitivity(data = train$pred, reference = train$Diagnosis, positive = "Schizophrenia")
+  test_sens[i] = sensitivity(data = test$pred, reference = test$Diagnosis, positive = "Schizophrenia")
+  train_spec[i] = specificity(data = train$pred, reference = train$Diagnosis, negative = "Control")
+  test_spec[i] = specificity(data = test$pred, reference = test$Diagnosis, negative = "Control")
+  #train_ci[i] = ci(train_rocCurve)
+  #test_ci[i] = ci(test_rocCurve)
+  train_PPV[i] = posPredValue(data = train$pred, reference = train$Diagnosis, positive = "Schizophrenia")
+  test_PPV[i] = posPredValue(data = test$pred, reference = test$Diagnosis, positive = "Schizophrenia")
+  train_NPV[i] = negPredValue(data = train$pred, reference = train$Diagnosis, negative = "Control")
+  test_NPV[i] = negPredValue(data = test$pred, reference = test$Diagnosis, negative = "Control")
+
+  i = i + 1
+}
+  
+  m_train_auc = mean(train_auc)
+  m_test_auc = mean(test_auc)
+  m_train_sens = mean(train_sens)
+  m_test_sens = mean(test_sens)
+  m_train_spec = mean(train_spec)
+  m_test_spec = mean(test_spec)
+
+  m_train = mean(trainRMSE)
+  m_test = mean(testRMSE) 
+  DiffTrainTest = m_train - m_test
+
+  return(c(m_train_auc, m_test_auc,m_train_sens,m_test_sens, m_train_spec, m_test_spec,m_train, m_test, DiffTrainTest)) # specifying what we want the function to return
+}
+
+```
 
 N.B. the predict() function generates log odds (the full scale between minus and plus infinity). Log odds > 0 indicates a choice of 1, below a choice of 0.
 N.N.B. you need to decide whether calculate performance on each single test fold or save all the prediction for test folds in one datase, so to calculate overall performance.
