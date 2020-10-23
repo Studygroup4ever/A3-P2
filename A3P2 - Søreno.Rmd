@@ -13,7 +13,7 @@ knitr::opts_chunk$set(echo = TRUE)
 # Loading packages
 library(pacman)
 
-p_load(lme4, tidyverse, caret, pROC)
+p_load(lme4, tidyverse, caret, pROC, Metrics)
 
 # Setting theme minimal
 theme_set(theme_minimal())
@@ -50,22 +50,27 @@ df <- read.csv("npause_fixed.csv")
 # Fixing categories
 df <- df %>%
   mutate(
-    Diagnosis.y = as.factor(Diagnosis.y),
+    Diagnosis = as.factor(Diagnosis.y),
     pause_dur = as.numeric(pause_dur),
     Participant = as.factor(Participant)
   )
 
-# Creating test/training set
-
-# 75% of the sample size
-smp_size <- floor(0.75 * nrow(df))
-
-# Set the seed to make your partition reproducible
-train_ind <- sample(seq_len(nrow(df)), size = smp_size)
-
-train <- df[train_ind,]
-test <- df[-train_ind,]
+# # Creating test/training set
+# 
+# # 75% of the sample size
+# smp_size <- floor(0.75 * nrow(df))
+# 
+# # Set the seed to make your partition reproducible
+# train_ind <- sample(seq_len(nrow(df)), size = smp_size)
+# 
+# train <- df[train_ind,]
+# test <- df[-train_ind,]
 ```
+
+
+
+
+
 
 We first want to build a logistic regression to see whether you can diagnose schizophrenia from your best acoustic feature. Let's use the full dataset and calculate the different performance measures (accuracy, sensitivity, specificity, PPV, NPV, ROC curve). You need to think carefully as to how we should (or not) use study and subject ID.
 
@@ -78,11 +83,145 @@ logit2prob <- function(logit) {
 }
 ```
 
+```{r}
+folding <- function(syntax) {
+  k = 10
+  folds <-
+    createFolds(
+      unique(df$Participant),
+      k = k,
+      list = TRUE,
+      returnTrain = FALSE
+    )
+  # trainRMSE <- rep(NA, k)
+  # testRMSE <- rep(NA, k)
+  
+  train_auc = rep(NA, k)
+  test_auc = rep(NA, k)
+  
+  train_sens = rep(NA, k)
+  test_sens = rep(NA, k)
+  
+  train_spec = rep(NA, k) #placeholders, fydler dem ud i næste loop
+  test_spec = rep(NA, k)
+  
+  #train_ci = rep(NA,k)
+  #test_ci = rep(NA,k)
+  
+  train_PPV = rep(NA, k)
+  test_PPV = rep(NA, k)
+  train_NPV = rep(NA, k)
+  test_NPV = rep(NA, k)
+  
+  i = 1
+  for (fold in folds) {
+    train = subset(df, !(Participant %in% fold))
+    test = subset(df, Participant %in% fold)
+    model = glmer(syntax, data = train, family = "binomial")
+    test <- test %>%
+      mutate(prediction = logit2prob(predict(model, newdata = test, allow.new.levels = TRUE)),
+             pred = as.factor(ifelse(prediction > .5, "Schizophrenia", "Control")))
+    
+    train <- train %>%
+      mutate(prediction = logit2prob(predict(model)),
+             pred = as.factor(ifelse(prediction > .5, "Schizophrenia", "Control")))
+    
+    # trainRMSE[i] = rmse(train$CHI_MLU, fitted(model)) # saving RMSE value for the training data at index i
+    # testRMSE[i] = rmse(test$CHI_MLU, test$pred) # saving RMSE value for the test data at index i
+    
+    train_rocCurve = roc(response = train$Diagnosis,
+                         predictor = train$prediction)
+    test_rocCurve = roc(response = test$Diagnosis,
+                        predictor = test$prediction)
+    train_auc[i] = as.numeric(auc(train_rocCurve))
+    test_auc[i] = as.numeric(auc(test_rocCurve))
+    train_sens[i] = sensitivity(
+      data = train$pred,
+      reference = train$Diagnosis,
+      positive = "Schizophrenia"
+    )
+    test_sens[i] = sensitivity(
+      data = test$pred,
+      reference = test$Diagnosis,
+      positive = "Schizophrenia"
+    )
+    train_spec[i] = specificity(
+      data = train$pred,
+      reference = train$Diagnosis,
+      negative = "Control"
+    )
+    test_spec[i] = specificity(
+      data = test$pred,
+      reference = test$Diagnosis,
+      negative = "Control"
+    )
+    #train_ci[i] = ci(train_rocCurve)
+    #test_ci[i] = ci(test_rocCurve)
+    train_PPV[i] = posPredValue(
+      data = train$pred,
+      reference = train$Diagnosis,
+      positive = "Schizophrenia"
+    )
+    test_PPV[i] = posPredValue(
+      data = test$pred,
+      reference = test$Diagnosis,
+      positive = "Schizophrenia"
+    )
+    train_NPV[i] = negPredValue(
+      data = train$pred,
+      reference = train$Diagnosis,
+      negative = "Control"
+    )
+    test_NPV[i] = negPredValue(
+      data = test$pred,
+      reference = test$Diagnosis,
+      negative = "Control"
+    )
+    
+    i = i + 1
+  }
+  
+  m_train_auc = mean(train_auc)
+  m_test_auc = mean(test_auc)
+  m_train_sens = mean(train_sens)
+  m_test_sens = mean(test_sens)
+  m_train_spec = mean(train_spec)
+  m_test_spec = mean(test_spec)
+  
+  m_train = mean(trainRMSE)
+  m_test = mean(testRMSE)
+  DiffTrainTest = m_train - m_test
+  
+  return(
+    c(
+      m_train_auc,
+      m_test_auc,
+      m_train_sens,
+      m_test_sens,
+      m_train_spec,
+      m_test_spec,
+      m_train,
+      m_test,
+      DiffTrainTest
+    )
+  ) # specifying what we want the function to return
+}
+```
+
+
+```{r}
+syntax <- "Diagnosis ~ IQR_scaled + (1 | Participant)"
+
+folding(syntax)
+
+```
+
+
 
 ```{r}
 # Speech rate model (glm)
 m_sr <-
-  glm(Diagnosis.y ~ SpeechRate_scaled,
+  glm(Diagnosis ~ SpeechRate_scaled,
       train,
       family = "binomial")
 
@@ -94,7 +233,7 @@ train <- train %>%
 # Creating confusion matrix on training data
 confusionMatrix (
   data = train$pred_class,
-  reference = train$Diagnosis.y,
+  reference = train$Diagnosis,
   positive = "Schizophrenia"
 )
 
@@ -106,22 +245,27 @@ test <- test %>%
 # Creating confusion matrix on test data
 confusionMatrix (
   data = test$pred_class,
-  reference = test$Diagnosis.y,
+  reference = test$Diagnosis,
   positive = "Schizophrenia"
 )
 
 # Plotting predictions
-test %>% ggplot(aes(x = pause_dur, y = pred_class, color = Diagnosis.y)) +
+test %>% ggplot(aes(x = pause_dur, y = pred_class, color = Diagnosis)) +
   geom_jitter()
+
+posPredValue(
+      data = train$pred_class,
+      reference = train$Diagnosis,
+      positive = "Schizophrenia"
+    )
 
 ```
 
 ```{r}
 # Pause duration model
 pausedur <-
-  glmer(Diagnosis.y ~ pause_dur + (1 | Participant),
+  glm(Diagnosis ~ pause_dur,
         family = "binomial",
-        control = glmerControl(optimizer = "nloptwrap", calc.derivs = FALSE),
         data = train)
 
 summary(pausedur)
@@ -134,7 +278,7 @@ train <- train %>%
 
 # Creating confusion matrix on training data
 confusionMatrix (data = train$pred_class,
-                 reference = train$Diagnosis.y,
+                 reference = train$Diagnosis,
                  positive = "Schizophrenia")
 
 # Creating predictions on test data
@@ -145,7 +289,7 @@ test <- test %>%
 
 # Creating confusion matrix on test data
 confusionMatrix (data = test$pred_class,
-                 reference = test$Diagnosis.y,
+                 reference = test$Diagnosis,
                  positive = "Schizophrenia")
 
 # Plotting predictions
@@ -156,7 +300,7 @@ train %>% ggplot(aes(x = pause_dur, y = pred, color = Diagnosis.y)) +
 
 ```{r}
 # ROC curve
-rocCurve <- roc(response = train$Diagnosis.y, predictor = train$pred)
+rocCurve <- roc(response = train$Diagnosis, predictor = train$pred)
 auc(rocCurve)
 ci (rocCurve)
 plot(rocCurve, legacy.axes = TRUE) 
@@ -166,7 +310,7 @@ plot(rocCurve, legacy.axes = TRUE)
 ```{r}
 # IQR model
 IQRscale <-
-  glmer(Diagnosis.y ~ IQR_scaled + (1 | Participant),
+  glmer(Diagnosis ~ IQR_scaled + (1 | Participant),
         family = "binomial",
         control = glmerControl(optimizer = "nloptwrap", calc.derivs = FALSE),
         data = train)
@@ -181,18 +325,18 @@ train <- train %>%
 
 # Creating confusion matrix on training data
 confusionMatrix (data = train$pred_class,
-                 reference = train$Diagnosis.y,
+                 reference = train$Diagnosis,
                  positive = "Schizophrenia")
 
 # Creating predictions on test data
 test <- test %>% 
-  mutate(pred = logit2prob(predict(IQRscale, newdata = test)),
+  mutate(pred = logit2prob(predict(IQRscale, newdata = test, allow.new.levels = TRUE)),
          pred_class = as.factor(ifelse(pred > .5, "Schizophrenia", "Control"))
          )
 
 # Creating confusion matrix on test data
 confusionMatrix (data = test$pred_class,
-                 reference = test$Diagnosis.y,
+                 reference = test$Diagnosis,
                  positive = "Schizophrenia")
 
 # Plotting predictions
@@ -204,8 +348,9 @@ train %>% ggplot(aes(x = IQR_scaled, y = pred, color = Diagnosis.y)) +
 # ROC curve
 rocCurve <- roc(response = train$Diagnosis.y, predictor = train$pred)
 auc(rocCurve)
-ci (rocCurve)
+as.numeric(ci(rocCurve))
 plot(rocCurve, legacy.axes = TRUE) 
+
 
 ```
 
