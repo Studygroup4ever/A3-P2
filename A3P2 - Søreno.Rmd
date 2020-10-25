@@ -52,24 +52,11 @@ df <- df %>%
   mutate(
     Diagnosis = as.factor(Diagnosis.y),
     pause_dur = as.numeric(pause_dur),
-    Participant = as.factor(Participant)
+    Participant = as.factor(Participant),
+    maybe = as.numeric(Participant)
   )
 
-# # Creating test/training set
-# 
-# # 75% of the sample size
-# smp_size <- floor(0.75 * nrow(df))
-# 
-# # Set the seed to make your partition reproducible
-# train_ind <- sample(seq_len(nrow(df)), size = smp_size)
-# 
-# train <- df[train_ind,]
-# test <- df[-train_ind,]
 ```
-
-
-
-
 
 
 We first want to build a logistic regression to see whether you can diagnose schizophrenia from your best acoustic feature. Let's use the full dataset and calculate the different performance measures (accuracy, sensitivity, specificity, PPV, NPV, ROC curve). You need to think carefully as to how we should (or not) use study and subject ID.
@@ -81,139 +68,178 @@ logit2prob <- function(logit) {
   probs <- odds / (1 + odds)
   return(probs)
 }
+
 ```
 
 ```{r}
-folding <- function(syntax) {
-  k = 10
-  folds <-
+# Creating function for folding and for creating and saving values we are interested in
+folding <- function(syntax, random) {
+ k = 10
+
+# Splitting the dataframe in the two categories to ensure that we have both categories in all folds
+  control <- df %>% filter(Diagnosis == "Control") %>% 
+    mutate(maybe = as.factor(maybe))
+  schizophrenia <- df %>% filter(Diagnosis == "Schizophrenia") %>% 
+    mutate(maybe = as.factor(maybe))
+
+# Creating folds for the two categories
+  foldsCon <-
     createFolds(
-      unique(df$Participant),
+      unique(control$maybe),
       k = k,
       list = TRUE,
-      returnTrain = FALSE
-    )
-  # trainRMSE <- rep(NA, k)
-  # testRMSE <- rep(NA, k)
-  
+      returnTrain = FALSE)
+  foldsSchiz <-
+    createFolds(
+      unique(schizophrenia$maybe),
+      k = k,
+      list = TRUE,
+      returnTrain = FALSE)
+
+# Creating various place holders
   train_auc = rep(NA, k)
   test_auc = rep(NA, k)
   
   train_sens = rep(NA, k)
   test_sens = rep(NA, k)
   
-  train_spec = rep(NA, k) #placeholders, fydler dem ud i næste loop
+  train_spec = rep(NA, k)
   test_spec = rep(NA, k)
-  
-  #train_ci = rep(NA,k)
-  #test_ci = rep(NA,k)
-  
+
   train_PPV = rep(NA, k)
   test_PPV = rep(NA, k)
+  
   train_NPV = rep(NA, k)
   test_NPV = rep(NA, k)
-  
-  i = 1
-  for (fold in folds) {
-    train = subset(df, !(Participant %in% fold))
-    test = subset(df, Participant %in% fold)
-    model = glmer(syntax, data = train, family = "binomial")
+
+# Looping through the different folds
+  for (i in 1:k) {
+    i <- as.numeric(i)
+# Creating test and train subset for the i'th fold. We add 88 because that's how many unique maybes there are in the control subset 
+    train <- rbind(subset(control,!(maybe %in% foldsCon[[i]])),
+                   subset(schizophrenia,!(maybe %in% (foldsSchiz[[i]] + 88))))
+    test <- rbind(subset(control, maybe %in% foldsCon[[i]]),
+                  subset(schizophrenia, maybe %in% (foldsSchiz[[i]] + 88)))
+   
+# Building models on the training set. The function do either glm or glmer models
+    if(random == F) {
+      model <- glm(syntax, data = train, family = "binomial")
+    } else {
+      model <- glmer(syntax, data = train, family = "binomial")
+    }
+
+# Creating predictions
     test <- test %>%
       mutate(prediction = logit2prob(predict(model, newdata = test, allow.new.levels = TRUE)),
              pred = as.factor(ifelse(prediction > .5, "Schizophrenia", "Control")))
-    
     train <- train %>%
       mutate(prediction = logit2prob(predict(model)),
              pred = as.factor(ifelse(prediction > .5, "Schizophrenia", "Control")))
-    
-    # trainRMSE[i] = rmse(train$CHI_MLU, fitted(model)) # saving RMSE value for the training data at index i
-    # testRMSE[i] = rmse(test$CHI_MLU, test$pred) # saving RMSE value for the test data at index i
-    
+
+# Checking the quality of our predictions - if there is only one category, it will mess stuf up later
+    qualiCheck <- ifelse(nlevels(test$pred) == 1, 0, 1)
+
+# ROC for train
     train_rocCurve = roc(response = train$Diagnosis,
                          predictor = train$prediction)
-    test_rocCurve = roc(response = test$Diagnosis,
-                        predictor = test$prediction)
-    train_auc[i] = as.numeric(auc(train_rocCurve))
-    test_auc[i] = as.numeric(auc(test_rocCurve))
+
+# Using the quality check to avoid errors in ROC for test
+    if(qualiCheck == 1){
+      test_rocCurve = roc(response = test$Diagnosis, predictor = test$prediction)
+    } else {
+      test_rocCurve = 0
+    }
+
+# AUC for test and train using quality check to avoid errors
+    train_auc[i] = as.numeric(pROC::auc(train_rocCurve))
+    test_auc[i] = ifelse(qualiCheck == 1,
+                         (as.numeric(pROC::auc(test_rocCurve))),
+                         0)
+
+# Sensitivity for test and train using quality check to avoid errors
     train_sens[i] = sensitivity(
       data = train$pred,
       reference = train$Diagnosis,
-      positive = "Schizophrenia"
-    )
-    test_sens[i] = sensitivity(
-      data = test$pred,
-      reference = test$Diagnosis,
-      positive = "Schizophrenia"
-    )
+      positive = "Schizophrenia")
+    test_sens[i] = ifelse(
+      qualiCheck == 1,
+      sensitivity(
+        data = test$pred,
+        reference = test$Diagnosis,
+        positive = "Schizophrenia"
+      ), 0)
+    
+# Specificity for test and train using quality check to avoid errors
     train_spec[i] = specificity(
       data = train$pred,
       reference = train$Diagnosis,
-      negative = "Control"
-    )
-    test_spec[i] = specificity(
+      negative = "Control")
+    test_spec[i] = ifelse(
+      qualiCheck == 1,
+      specificity(
       data = test$pred,
       reference = test$Diagnosis,
       negative = "Control"
-    )
-    #train_ci[i] = ci(train_rocCurve)
-    #test_ci[i] = ci(test_rocCurve)
+    ), 0)
+
+# PPV for test and train using quality check to avoid errors
     train_PPV[i] = posPredValue(
       data = train$pred,
       reference = train$Diagnosis,
-      positive = "Schizophrenia"
-    )
-    test_PPV[i] = posPredValue(
+      positive = "Schizophrenia")
+    test_PPV[i] = ifelse(
+      qualiCheck == 1,
+      posPredValue(
       data = test$pred,
       reference = test$Diagnosis,
       positive = "Schizophrenia"
-    )
+    ), 0)
+  
+# NPV for test and train using quality check to avoid errors
     train_NPV[i] = negPredValue(
       data = train$pred,
       reference = train$Diagnosis,
-      negative = "Control"
-    )
-    test_NPV[i] = negPredValue(
+      negative = "Control")
+    test_NPV[i] = ifelse(
+      qualiCheck == 1,
+      negPredValue(
       data = test$pred,
       reference = test$Diagnosis,
       negative = "Control"
-    )
+    ), 0)
     
-    i = i + 1
   }
   
-  m_train_auc = mean(train_auc)
-  m_test_auc = mean(test_auc)
-  m_train_sens = mean(train_sens)
-  m_test_sens = mean(test_sens)
-  m_train_spec = mean(train_spec)
-  m_test_spec = mean(test_spec)
-  
-  m_train = mean(trainRMSE)
-  m_test = mean(testRMSE)
-  DiffTrainTest = m_train - m_test
-  
+# Finding the mean for the different values
+  train_auc <- mean(train_auc)
+  test_auc <- mean(test_auc)
+  train_sens <- mean(train_sens)
+  train_sens <- mean(train_sens)
+  test_sens <- mean(test_sens)
+  train_spec <- mean(train_spec)
+  test_spec <- mean(test_spec)
+
+# Returning the values
   return(
-    c(
-      m_train_auc,
-      m_test_auc,
-      m_train_sens,
-      m_test_sens,
-      m_train_spec,
-      m_test_spec,
-      m_train,
-      m_test,
-      DiffTrainTest
+    tibble(
+      train_auc,
+      test_auc,
+      train_sens,
+      test_sens,
+      train_spec,
+      test_spec
     )
-  ) # specifying what we want the function to return
+  )
 }
+  
 ```
 
-
 ```{r}
-syntax <- "Diagnosis ~ IQR_scaled + (1 | Participant)"
+syntax1 <- 'Diagnosis ~ IQR_scaled'
+folding(syntax1, random = F)
 
-folding(syntax)
-
+syntax2 <- 'Diagnosis ~ IQR_scaled + (1|Participant)'
+folding(syntax2, random = T)
 ```
 
 
