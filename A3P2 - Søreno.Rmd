@@ -53,7 +53,7 @@ df <- df %>%
     Diagnosis = as.factor(Diagnosis.y),
     pause_dur = as.numeric(pause_dur),
     Participant = as.factor(Participant),
-    maybe = as.numeric(Participant)
+    maybe = as.numeric(Participant) # The participant column is behaving odd later - 'maybe' was a shot in the dark that hit the target ;)
   )
 
 ```
@@ -143,70 +143,62 @@ folding <- function(syntax, random) {
     train_rocCurve = roc(response = train$Diagnosis,
                          predictor = train$prediction)
 
-# Using the quality check to avoid errors in ROC for test
+# Using the quality check to avoid errors in ROC etc. for test
     if(qualiCheck == 1){
       test_rocCurve = roc(response = test$Diagnosis, predictor = test$prediction)
+      test_auc[i] = as.numeric(pROC::auc(test_rocCurve))
+      test_sens[i]= sensitivity(
+        data = test$pred,
+        reference = test$Diagnosis,
+        positive = "Schizophrenia")
+      test_spec[i] = specificity(
+        data = test$pred,
+        reference = test$Diagnosis,
+        negative = "Control")
+      test_PPV[i] = posPredValue(
+        data = test$pred,
+        reference = test$Diagnosis,
+       positive = "Schizophrenia")
+      test_NPV[i] = negPredValue(
+      data = test$pred,
+      reference = test$Diagnosis,
+      negative = "Control")
+      
     } else {
       test_rocCurve = 0
+      test_auc[i] = 0
+      test_sens[i]  = 0
+      test_spec[i] = 0
+      test_PPV[i] = 0
+      test_NPV[i] = 0
     }
 
-# AUC for test and train using quality check to avoid errors
+# AUC for training set
     train_auc[i] = as.numeric(pROC::auc(train_rocCurve))
-    test_auc[i] = ifelse(qualiCheck == 1,
-                         (as.numeric(pROC::auc(test_rocCurve))),
-                         0)
-
+    
 # Sensitivity for test and train using quality check to avoid errors
     train_sens[i] = sensitivity(
       data = train$pred,
       reference = train$Diagnosis,
       positive = "Schizophrenia")
-    test_sens[i] = ifelse(
-      qualiCheck == 1,
-      sensitivity(
-        data = test$pred,
-        reference = test$Diagnosis,
-        positive = "Schizophrenia"
-      ), 0)
     
 # Specificity for test and train using quality check to avoid errors
     train_spec[i] = specificity(
       data = train$pred,
       reference = train$Diagnosis,
       negative = "Control")
-    test_spec[i] = ifelse(
-      qualiCheck == 1,
-      specificity(
-      data = test$pred,
-      reference = test$Diagnosis,
-      negative = "Control"
-    ), 0)
 
 # PPV for test and train using quality check to avoid errors
     train_PPV[i] = posPredValue(
       data = train$pred,
       reference = train$Diagnosis,
       positive = "Schizophrenia")
-    test_PPV[i] = ifelse(
-      qualiCheck == 1,
-      posPredValue(
-      data = test$pred,
-      reference = test$Diagnosis,
-      positive = "Schizophrenia"
-    ), 0)
   
 # NPV for test and train using quality check to avoid errors
     train_NPV[i] = negPredValue(
       data = train$pred,
       reference = train$Diagnosis,
       negative = "Control")
-    test_NPV[i] = ifelse(
-      qualiCheck == 1,
-      negPredValue(
-      data = test$pred,
-      reference = test$Diagnosis,
-      negative = "Control"
-    ), 0)
     
   }
   
@@ -292,35 +284,24 @@ posPredValue(
 pausedur <-
   glm(Diagnosis ~ pause_dur,
         family = "binomial",
-        data = train)
+        data = df)
 
 summary(pausedur)
 
 # Creating predictions on training data
-train <- train %>% 
+df1 <- df %>% 
   mutate(pred = logit2prob(predict(pausedur)),
          pred_class = as.factor(ifelse(pred > .5, "Schizophrenia", "Control"))
          )
 
 # Creating confusion matrix on training data
-confusionMatrix (data = train$pred_class,
-                 reference = train$Diagnosis,
-                 positive = "Schizophrenia")
-
-# Creating predictions on test data
-test <- test %>% 
-  mutate(pred = logit2prob(predict(pausedur, newdata = test)),
-         pred_class = as.factor(ifelse(pred > .5, "Schizophrenia", "Control"))
-         )
-
-# Creating confusion matrix on test data
-confusionMatrix (data = test$pred_class,
-                 reference = test$Diagnosis,
+confusionMatrix (data = df1$pred_class,
+                 reference = df1$Diagnosis,
                  positive = "Schizophrenia")
 
 # Plotting predictions
-train %>% ggplot(aes(x = pause_dur, y = pred, color = Diagnosis.y)) + 
-  geom_point()
+df1 %>% ggplot(aes(x = pause_dur, y = pred_class, color = Diagnosis.y)) + 
+  geom_jitter()
 ```
 
 
@@ -370,15 +351,6 @@ train %>% ggplot(aes(x = IQR_scaled, y = pred, color = Diagnosis.y)) +
   geom_point()
 ```
 
-```{r}
-# ROC curve
-rocCurve <- roc(response = train$Diagnosis.y, predictor = train$pred)
-auc(rocCurve)
-as.numeric(ci(rocCurve))
-plot(rocCurve, legacy.axes = TRUE) 
-
-
-```
 
 Then cross-validate the logistic regression and re-calculate performance on the testing folds. N.B. The cross-validation functions you already have should be tweaked: you need to calculate these new performance measures. Alternatively, the groupdata2 and cvms package created by Ludvig are an easy solution. 
 
