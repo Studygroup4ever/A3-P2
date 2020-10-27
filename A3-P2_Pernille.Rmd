@@ -33,7 +33,7 @@ https://machinelearningmastery.com/machine-learning-ensembles-with-r/
 
 # Libraries
 ```{r}
-pacman::p_load(tidyverse,lme4,tidyverse, purrr,dplyr, caret,e1071,pROC)
+pacman::p_load(tidyverse,lme4,tidyverse, purrr,dplyr, caret,e1071,pROC,readr,lmerTest,Metrics,merTools,tidymodels)
 ```
 
 ### Let's start
@@ -75,14 +75,14 @@ m_pitch <-
     family = "binomial")
 
 # Including both acoustic features
-m_sr_pitch <-
-  glmer(
-    Diagnosis ~ IQR_scaled + SpeechRate_scaled + (1 | Participant),
-    data = df,
-    family = "binomial", control = glmerControl(optimizer = "nloptwrap", calc.derivs = FALSE))
+# m_sr_pitch <-
+#   glmer(
+#     Diagnosis ~ IQR_scaled + SpeechRate_scaled + (1 | Participant),
+#     data = df,
+#     family = "binomial", control = glmerControl(optimizer = "nloptwrap", calc.derivs = FALSE))
 
 # Checking anova
-anova(m_speechrate,m_pitch,m_sr_pitch)
+anova(m_speechrate,m_pitch)
 
 
 ```
@@ -122,7 +122,7 @@ Then cross-validate the logistic regression and re-calculate performance on the 
 ```{r}
 folding <- function(syntax){
   k = 10 
-  folds <- createFolds(unique(sub_df1$ID), k = k, list = TRUE, returnTrain = FALSE) 
+  folds <- createFolds(unique(df$Participant), k = k, list = TRUE, returnTrain = FALSE) 
   trainRMSE <- rep(NA, k) 
   testRMSE <- rep(NA, k) 
   
@@ -145,21 +145,20 @@ folding <- function(syntax){
 
 i = 1 
 for (fold in folds) {
-  train = subset(sub_df1,!(ID %in% fold)) 
-  test = subset(sub_df1, ID %in% fold) 
-  model = glmer(syntax, train, REML = F) 
+  train = subset(df,!(Participant %in% fold)) 
+  test = subset(df, Participant %in% fold) 
+  model = glmer(model, train, family = "binomial") 
   test <- test %>%
-  mutate(pred = logit2prob(predict(model, newdata = test)),
-         prediction = as.factor(ifelse(pred > .5, "Schizophrenia", "Control")))
-  
+  mutate(prediction = logit2prob(predict(model, newdata = test,allow.new.levels = TRUE)),
+         pred = as.factor(ifelse(prediction > .5, "Schizophrenia", "Control")))
   train <- train %>%
-  mutate(pred = logit2prob(predict(model)),
-         prediction = as.factor(ifelse(pred > .5, "Schizophrenia", "Control")))
+  mutate(prediction = logit2prob(predict(model)),
+         pred = as.factor(ifelse(prediction > .5, "Schizophrenia", "Control")))
   
   trainRMSE[i] = rmse(train$CHI_MLU, fitted(model)) # saving RMSE value for the training data at index i
   testRMSE[i] = rmse(test$CHI_MLU, test$prediction) # saving RMSE value for the test data at index i
-  train_rocCurve = roc(response = train$Diagnosis, predictor = train$pred)
-  test_rocCurve = roc(response = test$Diagnosis, predictor = test$pred)
+  train_rocCurve = roc(response = train$Diagnosis, predictor = as.numeric(train$pred))
+  test_rocCurve = roc(response = test$Diagnosis, predictor = as.numeric(test$pred))
   train_auc[i] = as.numeric(auc(train_rocCurve))
   test_auc[i] = as.numeric(auc(test_rocCurve))
   train_sens[i] = sensitivity(data = train$pred, reference = train$Diagnosis, positive = "Schizophrenia")
@@ -183,13 +182,49 @@ for (fold in folds) {
   m_train_spec = mean(train_spec)
   m_test_spec = mean(test_spec)
 
-  m_train = mean(trainRMSE)
-  m_test = mean(testRMSE) 
+  m_train_RMSE = mean(trainRMSE)
+  m_test_RMSE = mean(testRMSE) 
   DiffTrainTest = m_train - m_test
 
   return(c(m_train_auc, m_test_auc,m_train_sens,m_test_sens, m_train_spec, m_test_spec,m_train, m_test, DiffTrainTest)) # specifying what we want the function to return
 }
 
+```
+
+
+```{r}
+# The syntax of our two models, where m_pitch was the best one
+m_sr
+m_pitch
+
+# Storing the syntax and names of our models so we can loop through them
+models <- c(m_sr, m_pitch)
+names <- c('m_sr', 'm_pitch')
+
+# Creating place holder df for the loop
+obj <- matrix(0, ncol = 11, nrow = 10) %>% data.frame()
+
+# Changing the col-names in our place holder df
+colnames(obj)[1] <- 'ModelNames'
+colnames(obj)[2] <- 'm_train_auc'
+colnames(obj)[3] <- 'm_test_auc'
+colnames(obj)[4] <- 'm_train_sens'
+colnames(obj)[5] <- 'm_test_sens'
+colnames(obj)[6] <- 'm_train_spec'
+colnames(obj)[7] <- 'm_test_spec'
+colnames(obj)[8] <- 'm_test_sens'
+colnames(obj)[9] <- 'm_train_RMSE'
+colnames(obj)[10] <- 'm_test_RMSE'
+colnames(obj)[11] <- 'DiffTrainTest'
+
+
+# A loop
+i = 1 # indexing at i
+for (model in models) {
+  obj[i, 1] <- names[i] # saving the name of the models
+  obj[i, 2:11] <- folding(model) # using the folding function 
+  i = i + 1 # increasing index by 1
+}
 ```
 
 N.B. the predict() function generates log odds (the full scale between minus and plus infinity). Log odds > 0 indicates a choice of 1, below a choice of 0.
