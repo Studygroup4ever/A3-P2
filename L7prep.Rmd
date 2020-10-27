@@ -1,0 +1,232 @@
+---
+title: "L7_prep"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## L7 - coding along with Byurakn
+Doing the partitioning
+```{r}
+pacman::p_load("tidymodels", "recipes", "caret","groupdata2","kernlab", "yardstick","knitr","Metrics")
+df <- read.csv("npause_fixed.csv")
+df$Participant <- as.factor(df$Participant)
+
+df_par <- partition(df,p = 0.8, cat_col = "Diagnosis.y", id_col = "Participant", list_out = F)
+
+df_train <- subset(df_par, .partitions ==1)
+
+df_test <- subset(df_par, .partitions == 2)
+
+rec <- df_train %>% 
+  recipe(Diagnosis.y ~ ., data = df_train) #. chooses all predictors. WHAT IT DO? 
+
+rec_steps <- rec %>% 
+  step_scale(all_numeric()) %>% # making standard dev of 1 + make numeric
+  step_center(all_numeric()) # mean centering + make numeric
+
+prepped_recipe <- prep(rec_steps, training = df_train, retain = T) #retain = T important
+
+# get training set ready
+df_train_n <- juice(prepped_recipe) %>%  select(-c(Study.y, Participant, .partitions, X,ProportionSpokenTime_scaled, Mean_scaled, SAPS_scaled,SpeechRate_scaled,IQR_scaled,pause_dur_scaled, Diagnosis.x))
+
+# BAKE NOW
+df_test_n <- bake(rec, new_data = df_test, all_predictors()) %>% select(-c(Study.y, Participant, .partitions, X,ProportionSpokenTime_scaled, Mean_scaled, SAPS_scaled,SpeechRate_scaled,IQR_scaled,pause_dur_scaled,Diagnosis.x))
+
+df_test_n$.partitions <- NULL
+df_test_n$Diagnosis.x <- NULL
+
+```
+We told our recipes that all predictors are included but we want to select the specific ones we want.
+
+#MODEL TRAINING
+So far we have worked with glm algorithm, but there are many others in ML. 
+Logistic reg
+Penalized logistic regression (Lasso, glmmnet)
+Neural networks
+Support Vector Machine
+...
+```{r}
+# Defining models
+log_fit <- 
+  logistic_reg() %>% 
+  set_mode("classification") %>% 
+  set_engine("glm") %>%
+  fit(Diagnosis.y ~ .,data = df_train_n)
+
+svm_fit <- 
+  svm_rbf() %>% 
+  set_mode("classification") %>% 
+  set_engine("kernlab") %>% 
+  fit(Diagnosis.y ~ ., data = df_train_n)
+
+# creating a split between the classes, and then only saving the points that are closest to the line, that we use to define the line. Then we have all the data to shrink down... Good if you have lots of data
+```
+
+# WE STILL DIDN'T SCALE THE TEST SET
+```{r}
+df_test_n_scaled <- df_test_n %>% 
+  step_scale(all_numeric())
+```
+
+# ASSESS MODELS
+We left a test set that we didn't care about until now!
+
+We want to 
+```{r}
+# Performance - within sample vs out of sample error
+test_results <-
+  df_test %>%
+  as.tibble() %>%
+  mutate(
+    log_class = predict(log_fit, new_data = df_test_n) %>%
+      pull(.pred_class),
+    log_prob = predict(log_fit, new_data = df_test_n, type = "prob") %>%
+      pull(.pred_Schizophrenia),
+    svm_class = predict(svm_fit, new_data = df_test_n) %>%
+      pull(.pred_class),
+    svm_prob = predict(svm_fit, new_data = df_test_n, type = "prob") %>%
+      pull(.pred_Schizophrenia)
+  )
+
+test_results$Diagnosis.y <- test_results$Diagnosis.y %>% as.factor()
+
+# log model
+yardstick::metrics(test_results, truth = Diagnosis.y, estimate = log_class) %>%
+  knitr::kable()
+
+# svm model
+yardstick::metrics(test_results, truth = Diagnosis.y, estimate = svm_class) %>%
+  knitr::kable()
+
+```
+
+# EXTRA CROSS VALIDATION STUFF BECAUSE I WANT TO GET THIS - using some data called "swiss"
+*Swiss Fertility and Socioeconomic Indicators (1888) Data*
+
+Description:
+Standardized fertility measure and socio-economic indicators for each of 47 French-speaking provinces of Switzerland at about 1888. All variables are in percent. 
+
+Fertility	Ig, ‘common standardized fertility measure’
+Agriculture	% of males involved in agriculture as occupation
+Examination	% draftees receiving highest mark on army examination
+Education	% education beyond primary school for draftees.
+Catholic	% ‘catholic’ (as opposed to ‘protestant’).
+Infant.Mortality	live births who live less than 1 year.
+
+```{r}
+
+## WHAT IS THE DATA? ##
+
+# Loading some data
+data("swiss")
+
+# Variables in swiss
+variable.names(swiss)
+
+# Inspecting
+sample_n(swiss,3)
+
+# Dataframing
+swiss_df <- data.frame(swiss)
+
+# Plot because reasons
+swiss_df %>% ggplot(aes(x = Fertility, y = Agriculture, color = Catholic)) + geom_jitter()
+
+swiss_df %>% ggplot(aes(x = Fertility, y = Education, color = Catholic)) + geom_jitter()
+
+swiss_df %>% ggplot(aes(x = Examination, y = Agriculture, color = Catholic)) + geom_jitter()
+
+swiss_df %>% ggplot(aes(x = Education, y = Agriculture, color = Catholic)) + geom_jitter()
+
+## CROSS VALIDATION ##
+
+# Splitting the data into training (80%) and test set (20%)
+set.seed(123) #Forcing the seed to be the same generating the same list of random numbers. 
+
+training.samples <- swiss_df$Fertility %>% 
+  createDataPartition(p = 0.8, list = FALSE)
+
+train <- swiss_df[training.samples,]
+test <- swiss_df[-training.samples,]
+
+# Build model - on train
+model <- lm(Fertility~., data = train)
+
+# Make predictions and compute R2, RMSE, MAE
+predictions <- model %>% predict(test)
+
+# Dataframing
+data.frame(R2 = R2(predictions, test$Fertility),
+           RMSE = RMSE(predictions, test$Fertility), #predicted from the model on the test data, vs observed
+           MAE = MAE(predictions, test$Fertility),
+           test$Fertility)
+
+
+## K-FOLD CROSS VALIDATION ##
+##### REPEATED #####
+# Define training control
+set.seed(123)
+
+train.control <- trainControl(method = "cv", number = 10) 
+
+# Train the model
+model <- train(Fertility ~., data = swiss_df, method = "lm", trControl = train.control)
+
+# Summarize the results
+print(model)
+
+```
+
+## METHODS
+*k-fold cross validation*
+This method of cross validation evaluates model performance on different subsets of the data. What happens is that you fx with 5-fold cross validation partition your whole data pile in 5 smaller piles (subsets), and then you go through the steps iteratively until you have validated your model on each subset once, i other words, that each subset has played the role of test set each time - a time for every fold.
+
+1. Randomly split the data into k-subsets, fx k=5. (5 smaller piles of data)
+2. Reserve one subset/pile and train model on the rest (fx save 1, train on 4 subsets) 3. Test the model on the 1 reserved "test" subset/pile. Record the prediction error.
+4. Repeat the process until all subsets have been the test set once.
+5. Find the average of the prediction errors you recorded at step 3. 
+That number is the cross-validated error, which serves as the performance metric. 
+
+Example: 
+If we set k = 3, that means we will shuffle the data, and then make 3 piles. 
+If we have a total of 9 observations, this means we will have 3 observations in each fold: 
+Fold1: 3 obs
+Fold2: 3 obs
+Fold3: 3 obs
+
+Then we can train some models, say we have 3 models, and we can train them like this: 
+Model1: trained on Fold1 + Fold2, tested on Fold3
+Model2: trained on Fold2 + Fold3, tested on Fold1
+Model3: trained on Fold3 + Fold1, tested on Fold2
+
+The models are discarded after they have been "evaluated" on the test data. They have done what we needed them to. Then we collect the recorded prediction error, the score, and summarize them for use. 
+
+
+*why do cross validation?*
+The basic idea behind cross-validation is that you want a way to measure how good your model is on new test data sets that it has never seen before. The chances of finding out how to make a better model are bigger if you do cross-validation, because if you find that your model has big prediction errors, then you have time to tweak on it and train it again, until the prediction error is low. When it is low, that means it generalizes better to data which it has never seen before. 
+
+Advantages: 
+- Cross-validation allows us to use our data better. By using cross-validation we can use all our data both for training and testing while evaluating our learning algorithm on examples it has never seen before. 
+
+- When we make five models using our learning algorithm and test it on five different test sets, we can be more confident in how our algorithm performs. By training five models that are different we can understand better what is going on. If we trained five models and use accuracy as a measurement, we could in best scenario end up with having similar accuracy in all our folds, fx 92, 91, 92, 92,5... This means our algorithm and data is consistent and we can be confident that by training it on all the data set and deploy it in production will lead to similar performance. 
+
+Disadvantages: 
+- When we build a model on a fraction of the data we are possibly leaving out some interesting information about data leading to higher bias. So, depending on which observations happen to become included in training and validation/test set, the test prediction error rate can vary a lot. 
+
+- Bad case scenario, if we train 5 models and get accuracy of 92, 44, 91, 92 these results look weird. It looks like one of the folds is from a different distribution, and we then have to go back and make sure that our data is what we think it is. 
+- Worst case scenario is when we have considerable variation in our results, say 80, 44, 99, 60, 87 - this looks like our algorithm or our data or both it not consistent - could be that our algorithm is unable to learn or that our data is complicated. 
+#FUNCTIONS USED
+*createDataPartition*
+A series of test/training partitions are created using createDataPartition.
+
+*createFolds*
+createFolds splits the data into k groups.
+
+*predict*
+predict takes the model object for which prediction is desired and fits it to the test data that the model has never seen. Then, we can compute how far off our model is. If it is a perfect match, then RMSE = 0. 
+
+
+
