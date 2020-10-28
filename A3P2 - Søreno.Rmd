@@ -77,14 +77,12 @@ logit2prob <- function(logit) {
 folding <- function(syntax, random) {
  k = 10
 
-# Splitting the dataframe in the two categories to ensure that we have both categories in all folds
+# Splitting the data frame in the two categories to ensure that we have both categories in all folds
   control <- df %>% filter(Diagnosis == "Control") %>% 
     mutate(maybe = as.factor(maybe))
   schizophrenia <- df %>% filter(Diagnosis == "Schizophrenia") %>% 
     mutate(maybe = as.factor(maybe))
 
-  unique(df$Participant)
-  unique(control$Participant)
 
 # Creating folds for the two categories
   foldsCon <-
@@ -101,6 +99,9 @@ folding <- function(syntax, random) {
       returnTrain = FALSE)
 
 # Creating various place holders
+  accuracy_train = rep(NA, k)
+  accuracy_test = rep(NA, k)
+  
   train_auc = rep(NA, k)
   test_auc = rep(NA, k)
   
@@ -115,6 +116,9 @@ folding <- function(syntax, random) {
   
   train_NPV = rep(NA, k)
   test_NPV = rep(NA, k)
+  
+  train_nir = rep(NA, k)
+  test_nir = rep(NA, k)
 
 # Looping through the different folds
   for (i in 1:k) {
@@ -178,43 +182,43 @@ folding <- function(syntax, random) {
         data = test$pred,
         reference = test$Diagnosis,
         negative = "Control")
-      test_PPV[i] = posPredValue(
-        data = test$pred,
-        reference = test$Diagnosis,
-       positive = "Schizophrenia")
-      test_NPV[i] = negPredValue(
-      data = test$pred,
-      reference = test$Diagnosis,
-      negative = "Control")
+      test_PPV[i] = 0
+      test_NPV[i] = 0
     }
 
+    cm_test <- confusionMatrix (
+      data = test$pred,
+      reference = test$Diagnosis,
+      positive = "Schizophrenia"
+      )
+    cm_train <- confusionMatrix (
+      data = train$pred,
+      reference = train$Diagnosis,
+      positive = "Schizophrenia"
+      )
+    accuracy_train[i] <- cm_train[["overall"]][["Accuracy"]]
+    accuracy_test[i]<- cm_test[["overall"]][["Accuracy"]]
 # AUC for training set
     train_auc[i] = as.numeric(pROC::auc(train_rocCurve))
     
-# Sensitivity for test and train using quality check to avoid errors
-    train_sens[i] = sensitivity(
-      data = train$pred,
-      reference = train$Diagnosis,
-      positive = "Schizophrenia")
+# Sensitivity for test and train 
+    train_sens[i] = cm_train[["byClass"]][["Sensitivity"]]
+    test_sens[i] = cm_test[["byClass"]][["Sensitivity"]]
     
-# Specificity for test and train using quality check to avoid errors
-    train_spec[i] = specificity(
-      data = train$pred,
-      reference = train$Diagnosis,
-      negative = "Control")
+# Specificity for test and train 
+    train_spec[i] = cm_train[["byClass"]][["Specificity"]]
+    test_spec[i] = cm_test[["byClass"]][["Specificity"]]
 
-# PPV for test and train using quality check to avoid errors
-    train_PPV[i] = posPredValue(
-      data = train$pred,
-      reference = train$Diagnosis,
-      positive = "Schizophrenia")
+# PPV for test and train using 
+    train_PPV[i] = cm_train[["byClass"]][["Pos Pred Value"]]
+    test_PPV[i] = cm_test[["byClass"]][["Pos Pred Value"]]
   
-# NPV for test and train using quality check to avoid errors
-    train_NPV[i] = negPredValue(
-      data = train$pred,
-      reference = train$Diagnosis,
-      negative = "Control")
+# NPV for test and train using
+    train_NPV[i] = cm_train[["byClass"]][["Neg Pred Value"]]
+    test_NPV[i] = cm_test[["byClass"]][["Neg Pred Value"]]
     
+    train_nir[i] = cm_train[["overall"]][["AccuracyNull"]]
+    test_nir[i] = cm_test[["overall"]][["AccuracyNull"]]
   }
   
 # Finding the mean for the different values
@@ -225,6 +229,14 @@ folding <- function(syntax, random) {
   test_sens <- mean(test_sens)
   train_spec <- mean(train_spec)
   test_spec <- mean(test_spec)
+  train_PPV <- mean(train_PPV)
+  test_PPV <- mean(test_PPV)
+  train_NPV <- mean(train_NPV)
+  test_NPV <- mean(test_NPV)
+  accuracy_train <- mean(accuracy_train)
+  accuracy_test <- mean(accuracy_test)
+  train_nir <- mean(train_nir)
+  test_nir <- mean(test_nir)
 
 # Returning the values
   return(
@@ -234,7 +246,15 @@ folding <- function(syntax, random) {
       train_sens,
       test_sens,
       train_spec,
-      test_spec
+      test_spec,
+      train_PPV,
+      test_PPV,
+      train_NPV,
+      test_NPV,
+      accuracy_train,
+      accuracy_test,
+      train_nir,
+      test_nir
     )
   )
 }
@@ -243,16 +263,20 @@ folding <- function(syntax, random) {
 
 ```{r}
 syntax <- c('Diagnosis ~ IQR_scaled', 
-            'Diagnosis ~ IQR_scaled + (1|Participant)'
+            'Diagnosis ~ IQR_scaled + (1|Participant)',
+            'Diagnosis ~ IQR_scaled + SpeechRate_scaled + (1 | Participant)'
             )
 
-random <- c(F, T)
+random <- c(F, T, T)
 
 models <- tibble(syntax, random)
 
 output <- mapply(folding, models$syntax, models$random)
 
+colnames(output) <- c('IQR_glm', 'IQR_glmer', 'max_glmer')
+
 output
+
 ```
 
 
@@ -282,11 +306,12 @@ test <- test %>%
          pred_class = as.factor(ifelse(pred > .5, "Schizophrenia", "Control")))
 
 # Creating confusion matrix on test data
-confusionMatrix (
+cm <- confusionMatrix (
   data = test$pred_class,
   reference = test$Diagnosis,
   positive = "Schizophrenia"
 )
+cm
 
 # Plotting predictions
 test %>% ggplot(aes(x = pause_dur, y = pred_class, color = Diagnosis)) +
@@ -297,6 +322,11 @@ posPredValue(
       reference = train$Diagnosis,
       positive = "Schizophrenia"
     )
+
+negPredValue(
+      data = test$pred_class,
+      reference = test$Diagnosis,
+      negative = "Control")
 
 ```
 
@@ -370,6 +400,12 @@ confusionMatrix (data = test$pred_class,
 # Plotting predictions
 train %>% ggplot(aes(x = IQR_scaled, y = pred, color = Diagnosis.y)) + 
   geom_point()
+
+negPredValue(
+      data = test$pred_class,
+      reference = test$Diagnosis,
+      negative = "Control")
+
 ```
 
 
