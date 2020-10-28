@@ -1,0 +1,238 @@
+---
+title: "HowToDoAFunctionByUsBecauseWeWantToLearnThisB"
+author: "us"
+date: "10/28/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# Packages
+pacman::p_load("tidymodels", "recipes", "caret","groupdata2","kernlab", "yardstick","knitr","Metrics", "pROC")
+
+# Data
+df <- read.csv("npause_fixed.csv")
+
+# Changing stuff because reasons
+df$Participant <- as.factor(df$Participant)
+df$Diagnosis.y <- as.factor(df$Diagnosis.y)
+
+# Make a new column for participant, because it is misbehavin'
+df <- df %>% 
+  mutate(Participant_new = as.numeric(Participant))
+
+# Making logit 2 prob function, we will need this later on
+logit2prob <- function(logit){
+  odds <- exp(logit)
+  prob <- odds/(1+odds)
+  return(prob)
+}
+```
+
+```{r}
+# # Partitioning data into test / train
+# df_par <- partition(df,p = 0.8, cat_col = "Diagnosis.y", id_col = "Participant", list_out = F)
+# 
+# train <- subset(df_par, .partitions == 1)
+# test <- subset(df_par, .partitions == 2)
+# 
+# # Train the model on the 'train'
+# m <- glmer(Diagnosis.y~ IQR_scaled + (1|Participant), data = train, family = "binomial")
+```
+
+```{r}
+# Make it for one times
+k = 10 
+folds <- createFolds(unique(df$Participant_new), k = k, list = TRUE, returnTrain = FALSE)
+
+# Making some placeholders
+acc_train <- rep(NA,k)
+acc_test <- rep(NA,k)
+
+train_auc = rep(NA, k)
+test_auc = rep(NA, k)
+  
+train_sens = rep(NA, k)
+test_sens = rep(NA, k)
+  
+train_spec = rep(NA, k)
+test_spec = rep(NA, k)
+
+train_PPV = rep(NA, k)
+test_PPV = rep(NA, k)
+  
+train_NPV = rep(NA, k)
+test_NPV = rep(NA, k)
+  
+train_nir = rep(NA, k)
+test_nir = rep(NA, k)
+
+# We want to loop through the different folds
+for (i in 1:k) { # could also be "for fold in folds" - we want to loop through all folds = all of k
+  i = as.numeric(i)
+  train = subset(df,!(Participant_new %in% folds[[i]])) #Say "We want all the participants that are NOT in the 'current' fold to belong to our train-subset."
+  test = subset(df,Participant_new %in% folds[[i]])
+  model = glmer(Diagnosis.y ~ IQR_scaled + (1|Participant), data = train, family = "binomial")
+  train = train %>% 
+    mutate(prediction = predict(model),
+           prob = logit2prob(prediction),
+           class = as.factor(ifelse(prob <= 0.5, "Control", "Schizophrenia")))
+  test = test %>% 
+   mutate(prediction = predict(model, newdata = test, allow.new.levels = TRUE), #It complains when not including it because the model is fit to train-data, which is in this case 1273 obs long, and the test set is not that size. We need to allow new levels in order to let it make predictions on that data.
+          prob = logit2prob(prediction),
+          class = as.factor(ifelse(prob <= 0.5, "Control", "Schizophrenia")))
+  cm_train = confusionMatrix(data = train$class, reference = train$Diagnosis.y, positive = "Schizophrenia")
+  cm_test = confusionMatrix(data = test$class, reference = test$Diagnosis.y, positive = "Schizophrenia")
+  acc_train[i] = cm_train[["overall"]][["Accuracy"]] #recording accuracy train in the placeholder we made before
+  acc_test[i] = cm_test[["overall"]][["Accuracy"]] #same for test
+  
+  # ROC for train
+    train_rocCurve = roc(response = train$Diagnosis.y,
+                         predictor = train$prob)
+  train_auc[i] = as.numeric(pROC::auc(train_rocCurve))
+  # ROC for test
+    test_rocCurve = roc(response = test$Diagnosis.y,
+                         predictor = test$prob)
+    
+  test_auc[i] = as.numeric(pROC::auc(test_rocCurve))
+  # rest of the placeholders are in the confusion matrix, so we can index from here: 
+  
+  train_sens[i] = cm_train[["byClass"]][["Sensitivity"]]
+  test_sens[i] = cm_test[["byClass"]][["Sensitivity"]]
+  
+  train_spec[i] = cm_train[["byClass"]][["Specificity"]]
+  test_spec[i] = cm_test[["byClass"]][["Specificity"]]
+
+  train_PPV[i] = cm_train[["byClass"]][["Pos Pred Value"]]
+  test_PPV[i] = cm_test[["byClass"]][["Pos Pred Value"]]
+  
+  train_NPV[i] = cm_train[["byClass"]][["Neg Pred Value"]]
+  test_NPV[i] = cm_test[["byClass"]][["Neg Pred Value"]]
+  
+  train_nir[i] = cm_train[["overall"]][["AccuracyNull"]]
+  test_nir[i] = cm_test[["overall"]][["AccuracyNull"]]
+}
+
+acc_train = mean(acc_train)
+acc_test = mean(acc_test)
+
+train_auc = mean(train_auc)
+test_auc = mean(test_auc)
+  
+train_sens = mean(train_sens)
+test_sens = mean(test_sens)
+  
+train_spec = mean(train_spec)
+test_spec = mean(test_spec)
+
+train_PPV = mean(train_PPV)
+test_PPV = mean(test_PPV)
+  
+train_NPV = mean(train_NPV)
+test_NPV = mean(test_NPV)
+  
+train_nir = mean(train_nir)
+test_nir = mean(test_nir)
+
+```
+
+# CONVERT IT INTO A FUNCTION
+```{r}
+folding <- function(syntax){
+  k = 10 
+folds <- createFolds(unique(df$Participant_new), k = k, list = TRUE, returnTrain = FALSE)
+
+# Making some placeholders
+acc_train <- rep(NA,k)
+acc_test <- rep(NA,k)
+
+train_auc = rep(NA, k)
+test_auc = rep(NA, k)
+  
+train_sens = rep(NA, k)
+test_sens = rep(NA, k)
+  
+train_spec = rep(NA, k)
+test_spec = rep(NA, k)
+
+train_PPV = rep(NA, k)
+test_PPV = rep(NA, k)
+  
+train_NPV = rep(NA, k)
+test_NPV = rep(NA, k)
+  
+train_nir = rep(NA, k)
+test_nir = rep(NA, k)
+
+# We want to loop through the different folds
+for (i in 1:k) { # could also be "for fold in folds" - we want to loop through all folds = all of k
+  i = as.numeric(i)
+  train = subset(df,!(Participant_new %in% folds[[i]])) #Say "We want all the participants that are NOT in the 'current' fold to belong to our train-subset."
+  test = subset(df,Participant_new %in% folds[[i]])
+  model = glmer(syntax, data = train, family = "binomial")
+  train = train %>% 
+    mutate(prediction = predict(model),
+           prob = logit2prob(prediction),
+           class = as.factor(ifelse(prob <= 0.5, "Control", "Schizophrenia")))
+  test = test %>% 
+   mutate(prediction = predict(model, newdata = test, allow.new.levels = TRUE), #It complains when not including it because the model is fit to train-data, which is in this case 1273 obs long, and the test set is not that size. We need to allow new levels in order to let it make predictions on that data.
+          prob = logit2prob(prediction),
+          class = as.factor(ifelse(prob <= 0.5, "Control", "Schizophrenia")))
+  cm_train = confusionMatrix(data = train$class, reference = train$Diagnosis.y, positive = "Schizophrenia")
+  cm_test = confusionMatrix(data = test$class, reference = test$Diagnosis.y, positive = "Schizophrenia")
+  acc_train[i] = cm_train[["overall"]][["Accuracy"]] #recording accuracy train in the placeholder we made before
+  acc_test[i] = cm_test[["overall"]][["Accuracy"]] #same for test
+  
+  # ROC for train
+    train_rocCurve = roc(response = train$Diagnosis.y,
+                         predictor = train$prob)
+  train_auc[i] = as.numeric(pROC::auc(train_rocCurve))
+  # ROC for test
+    test_rocCurve = roc(response = test$Diagnosis.y,
+                         predictor = test$prob)
+    
+  test_auc[i] = as.numeric(pROC::auc(test_rocCurve))
+  # rest of the placeholders are in the confusion matrix, so we can index from here: 
+  
+  train_sens[i] = cm_train[["byClass"]][["Sensitivity"]]
+  test_sens[i] = cm_test[["byClass"]][["Sensitivity"]]
+  
+  train_spec[i] = cm_train[["byClass"]][["Specificity"]]
+  test_spec[i] = cm_test[["byClass"]][["Specificity"]]
+
+  train_PPV[i] = cm_train[["byClass"]][["Pos Pred Value"]]
+  test_PPV[i] = cm_test[["byClass"]][["Pos Pred Value"]]
+  
+  train_NPV[i] = cm_train[["byClass"]][["Neg Pred Value"]]
+  test_NPV[i] = cm_test[["byClass"]][["Neg Pred Value"]]
+  
+  train_nir[i] = cm_train[["overall"]][["AccuracyNull"]]
+  test_nir[i] = cm_test[["overall"]][["AccuracyNull"]]
+}
+
+list = tibble(
+  train_sens,
+  test_sens,
+  train_spec,
+  test_spec,
+  train_PPV,
+  test_PPV,
+  train_NPV,
+  test_NPV,
+  train_nir,
+  test_nir
+)
+
+return(lapply(list, mean))
+}
+
+out <- folding(Diagnosis.y ~ IQR_scaled + (1|Participant))
+out
+```
+
+*partition*
+Splits data into partitions. Balances a given categorical variable (fx Diagnosis) and/or numerical variable between partitions and keeps (if possible) all data points with a shared ID (e.g. participant_id) in the same partition.
+
