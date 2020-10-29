@@ -12,13 +12,20 @@ Doing the partitioning
 ```{r}
 pacman::p_load("tidymodels", "recipes", "caret","groupdata2","kernlab", "yardstick","knitr","Metrics")
 df <- read.csv("npause_fixed.csv")
+variable.names(df)
 df$Participant <- as.factor(df$Participant)
 
 df_par <- partition(df,p = 0.8, cat_col = "Diagnosis.y", id_col = "Participant", list_out = F)
 
-df_train <- subset(df_par, .partitions ==1)
+df_train <- subset(df_par, .partitions == 1)
 
 df_test <- subset(df_par, .partitions == 2)
+
+df_train$Diagnosis.y <- as.factor(df_train$Diagnosis.y)
+
+# Is it stratified/balanced?
+df_train %>% group_by(Diagnosis.y) %>% count()
+df_test %>% group_by(Diagnosis.y) %>% count()
 
 rec <- df_train %>% 
   recipe(Diagnosis.y ~ ., data = df_train) #. chooses all predictors. WHAT IT DO? 
@@ -33,7 +40,7 @@ prepped_recipe <- prep(rec_steps, training = df_train, retain = T) #retain = T i
 df_train_n <- juice(prepped_recipe) %>%  select(-c(Study.y, Participant, .partitions, X,ProportionSpokenTime_scaled, Mean_scaled, SAPS_scaled,SpeechRate_scaled,IQR_scaled,pause_dur_scaled, Diagnosis.x))
 
 # BAKE NOW
-df_test_n <- bake(rec, new_data = df_test, all_predictors()) %>% select(-c(Study.y, Participant, .partitions, X,ProportionSpokenTime_scaled, Mean_scaled, SAPS_scaled,SpeechRate_scaled,IQR_scaled,pause_dur_scaled,Diagnosis.x))
+df_test_n <- bake(prepped_recipe, new_data = df_test, all_predictors()) %>% select(-c(Study.y, Participant, .partitions, X,ProportionSpokenTime_scaled, Mean_scaled, SAPS_scaled,SpeechRate_scaled,IQR_scaled,pause_dur_scaled,Diagnosis.x))
 
 df_test_n$.partitions <- NULL
 df_test_n$Diagnosis.x <- NULL
@@ -56,25 +63,25 @@ log_fit <-
   set_engine("glm") %>%
   fit(Diagnosis.y ~ .,data = df_train_n)
 
+variable.names(df_train_n)
 svm_fit <- 
   svm_rbf() %>% 
   set_mode("classification") %>% 
   set_engine("kernlab") %>% 
-  fit(Diagnosis.y ~ ., data = df_train_n)
+  fit(Diagnosis.y ~ SANS + Trial + phonationtime..s.+Age+SAPS+npause+IQR+Mean+Gender+dur..s.+speechrate..nsyll.dur. + pause_dur, data = df_train_n)
 
 # creating a split between the classes, and then only saving the points that are closest to the line, that we use to define the line. Then we have all the data to shrink down... Good if you have lots of data
 ```
 
-# WE STILL DIDN'T SCALE THE TEST SET
+# WE STILL DIDN'T SCALE THE TEST SET (UPDATE: WE DID - IT DOES IT WITH BAKE)
 ```{r}
-df_test_n_scaled <- df_test_n %>% 
-  step_scale(all_numeric())
+#df_test_n_scaled <- df_test_n %>% 
+#  step_scale(all_numeric())
 ```
 
 # ASSESS MODELS
 We left a test set that we didn't care about until now!
 
-We want to 
 ```{r}
 # Performance - within sample vs out of sample error
 test_results <-
@@ -90,9 +97,10 @@ test_results <-
     svm_prob = predict(svm_fit, new_data = df_test_n, type = "prob") %>%
       pull(.pred_Schizophrenia)
   )
+# adding diag.y
+#test_results$Diagnosis <- as.factor(df_test$Diagnosis.y)
 
-test_results$Diagnosis.y <- test_results$Diagnosis.y %>% as.factor()
-
+#df_test$Diagnosis.y <- as.factor(df_test$Diagnosis.y)
 # log model
 yardstick::metrics(test_results, truth = Diagnosis.y, estimate = log_class) %>%
   knitr::kable()

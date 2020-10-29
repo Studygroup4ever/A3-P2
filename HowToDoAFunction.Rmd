@@ -41,6 +41,7 @@ logit2prob <- function(logit){
 # 
 # # Train the model on the 'train'
 # m <- glmer(Diagnosis.y~ IQR_scaled + (1|Participant), data = train, family = "binomial")
+
 ```
 
 ```{r}
