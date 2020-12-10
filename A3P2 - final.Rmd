@@ -7,6 +7,8 @@ output:
   html_document: default
 ---
 
+# This part of the code was written by KK
+
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 #knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
@@ -92,7 +94,7 @@ N.N.B. you need to decide whether calculate performance on each single test fold
 N.N.N.B. Now you have two levels of structure: subject and study. Should this impact your cross-validation?
 N.N.N.N.B. A more advanced solution could rely on the tidy-models set of packages (warning: Time-consuming to learn as the documentation is sparse, but totally worth it)
 
-
+# This part of the code was written by SOH
 
 ```{r}
 # Creating logit to probability function
@@ -103,6 +105,8 @@ logit2prob <- function(logit) {
 }
 
 ```
+
+# This part of the code was written by CP
 
 ```{r}
 # Creating function for folding and for creating and saving values we are interested in
@@ -202,7 +206,7 @@ folding <- function(syntax, random) {
           Mean + Gender + dur..s. + speechrate..nsyll.dur. + pause_dur,
         data = df_train_n
      )
-  
+  # This part of the code was written by PB
   # Performance - within sample vs out of sample error
     test_results <-
       df_test %>%
@@ -354,6 +358,8 @@ folding <- function(syntax, random) {
 
 
 ```
+
+# This part of the code was written by JJ
 
 ```{r}
 # Syntax of the models we want to build
